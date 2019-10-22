@@ -1,0 +1,175 @@
+library("quantmod")
+getSymbols(c("SPY", scr="yahoo"),from = as.Date("2007-01-04"), to = as.Date("2019-10-18"))
+SPY500<- SPY[,"SPY.Close"]
+SPY500
+#fill NA with previous non-NA value
+library(zoo)
+library(dplyr)
+SPY500 <- na.locf(SPY500)
+return <- Delt(SPY500)
+rows = nrow(return)
+return <- return[2:rows]
+plot(return)
+
+#technical analysis indicators
+average10<- rollapply(SPY500, 10, mean)
+average20<-rollapply(SPY500, 20, mean)
+std10<- rollapply(SPY500, 10, sd)
+std20<- rollapply(SPY500, 20, sd)
+rsi5<- RSI(SPY500,5,"SMA")
+rsi14<- RSI(SPY500, 14, "SMA") 
+macd12269<- MACD(SPY500, 12, 26, 9, "SMA")
+macd7205<- MACD(SPY500, 7, 20, 5, "SMA")
+bollinger_bands<-BBands(SPY500,20,"SMA",2)
+direction<- data.frame(matrix(NA,dim(SPY500)[1],1))
+lagreturn<- (SPY500 - Lag(SPY500, 20))/Lag(SPY500, 20)
+direction[lagreturn>0.02] <- "Up"
+direction[lagreturn< -0.02] <- "Down"
+direction[lagreturn< 0.02 &lagreturn> -0.02] <- "NoWhere"
+
+#GARCH Model
+require(stats)
+require(tseries)
+require(forecast)
+#adf test suggesting stationarity
+adf.test(return)
+
+#PACF plot suggests significant spike through lag 2.
+pacf(return)
+
+#ACF plot shows exponential decay. Thus, it can be deduced AR(2) model.
+acf(return)
+
+lengthOfReturns<-length(return)
+timeseries <- ts(return)
+
+ARIMA_Model <- arima(window(timeseries,1,lengthOfReturns), order=c(2,0,0), method = "ML")
+acf((ARIMA_Model$residuals)^2)
+pacf((ARIMA_Model$residuals)^2)
+require(fGarch)
+model <- garchFit(formula = ~ arma(2,0) + garch(11,0) , data = timeseries, trace = F)
+summary(model)
+res = residuals(model)
+
+#qq-plot of residual between GARCH model and actual data 
+qqnorm(res)
+library("rugarch")
+garch11_spec <- ugarchspec(variance.model = list(garchOrder = c(11, 0)),mean.model = list(armaOrder = c(2, 0)))
+garch11_fit<-ugarchfit(spec=garch11_spec, data=timeseries)
+garch11_fit
+garch11_fit@fit$fitted.values
+
+#visualize how well GARCH itself fit the data
+plot(timeseries, type="l", col="blue")
+lines(garch11_fit@fit$fitted.values, col="green")
+
+#binding closing price and technical analysis indicators into a variable SPY500
+SPY500 <- cbind(SPY500[2:nrow(SPY500)], average10[2:nrow(average10)], average20[2:nrow(average20)], std10[2:nrow(std10)], std20[2:nrow(std20)], rsi5[2:nrow(rsi5)], rsi14[2:nrow(rsi14)], macd12269[2:nrow(macd12269)], macd7205[2:nrow(macd7205)], bollinger_bands[2:nrow(bollinger_bands)])
+
+#integrate GARCH model rolling window prediction output into variable 
+SPY500 <- cbind(SPY500,garch11_fit@fit$fitted.values)
+
+#Import Google trend data regarding trend of recession and expansion
+recessiondata<-read.csv("C:/WQU/Recession_gtrends.csv",header=F)$V2
+expansiondata<-read.csv("C:/WQU/Expansion_gtrends.csv",header=F)$V2
+#integrate Google trend data into variable
+SPY500 <- cbind(SPY500,recessiondata,expansiondata)
+
+#indicate end and start dates for train, validating and testing period
+train_sdate<- "2007-03-01"
+train_edate<- "2017-03-01"
+vali_sdate<- "2017-03-02"
+vali_edate<- "2018-03-02"
+test_sdate<- "2018-03-03"
+test_edate<- "2019-10-18"
+
+#constructing data ranges for the three datasets
+trainrow<- which(index(SPY500) >= train_sdate& index(SPY500) <= train_edate)
+valirow<- which(index(SPY500) >= vali_sdate& index(SPY500) <= vali_edate)
+testrow<- which(index(SPY500) >= test_sdate& index(SPY500) <= test_edate)
+
+#extract data fpr training, validating and testing periods
+train<- SPY500[trainrow,]
+vali<- SPY500[valirow,]
+test<- SPY500[testrow,]
+trainme<-apply(train,2,mean)
+trainstd<-apply(train,2,sd)
+
+#training, validating and testing data dimensions
+trainidn<- (matrix(1,dim(train)[1],dim(train)[2]))
+valiidn<- (matrix(1,dim(vali)[1],dim(vali)[2]))
+testidn<- (matrix(1,dim(test)[1],dim(test)[2]))
+
+#normalize the three datasets
+norm_train<- (train-t(trainme*t(trainidn)))/t(trainstd*t(trainidn))
+norm_vali<- (vali-t(trainme*t(valiidn)))/t(trainstd*t(valiidn))
+norm_test<- (test-t(trainme*t(testidn)))/t(trainstd*t(testidn))
+
+#define training, validating and testing period
+traindir<- direction[trainrow,1]
+validir<- direction[valirow,1]
+testdir<- direction[testrow,1]
+
+
+
+#implement ANN
+library(nnet)
+set.seed(1)
+neural_network<- nnet(norm_train, class.ind(traindir), size=4, trace=T)
+
+#obtain data dimension
+dim(norm_train)
+
+#make prediction
+vali_pred<-predict(neural_network, norm_vali)
+head(vali_pred)
+
+#calculate the predicted direction using the information obtained above
+vali_pred_class<- data.frame(matrix(NA,dim(vali_pred)[1],1))
+vali_pred_class[vali_pred[,"Down"] > 0.5,1]<- "Down"
+vali_pred_class[vali_pred[,"NoWhere"] > 0.5,1]<- "NoWhere"
+vali_pred_class[vali_pred[,"Up"] > 0.5,1]<- "Up"
+vali_pred_class[is.na(vali_pred_class)]<- "NoWhere"
+
+#check forecast accuracy
+library(caret)
+u<- union(vali_pred_class[,1],validir)
+t<-table(factor(vali_pred_class[,1],u),factor(validir,u))
+confusionMatrix(t)
+
+#check accuracy on testing data
+test_pred<- predict(neural_network, norm_test)
+test_pred
+
+#indicate the classes for the testing data
+test_pred_class<- data.frame(matrix(NA,dim(test_pred)[1],1))
+test_pred_class[test_pred[,"Down"] > 0.5,1]<- "Down"
+test_pred_class[test_pred[,"NoWhere"] > 0.5,1]<- "NoWhere"
+test_pred_class[test_pred[,"Up"] > 0.5,1]<- "Up"
+test_pred_class[is.na(test_pred_class)]<- "NoWhere"
+
+#Check the accuracy of the forecasts
+u<- union(test_pred_class[,1],testdir)
+t<-table(factor(test_pred_class[,1],u),factor(testdir,u))
+confusionMatrix(t)
+
+#generate trade signals using the same pattern as human psychology
+signal<-ifelse(test_pred_class=="Up",1,ifelse(test_pred_class=="Down",-1, 0))
+signal
+
+test_return_SPY<- return[(index(return)>= test_sdate & index(return)<= test_edate), ]
+test_return<- test_return_SPY*(signal)
+library(PerformanceAnalytics)
+
+#calculate cummulative return
+cumm_return<- Return.cumulative(test_return)
+cumm_return
+
+#calculate annual return
+annual_return<- Return.annualized(test_return)
+annual_return
+charts.PerformanceSummary(test_return)
+VaR(test_return, p=0.95)
+SharpeRatio(as.ts(test_return), Rf = 0, p=0.95, FUN = "StdDev")
+SharpeRatio.annualized(test_return, Rf=0)
+
