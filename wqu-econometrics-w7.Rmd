@@ -185,7 +185,7 @@ SharpeRatio(as.ts(test_return), Rf = 0, p=0.95, FUN = "StdDev")
 SharpeRatio.annualized(test_return, Rf=0)
 ```
 
-# 3.3.2 Improve The Strategy
+# 3.3.2 Improve The Strategy  
 ### Implment Pair trading and Back-Testing in Excel
 To improve the trading strategy, we revisit to do EDA (exploratory data analysis) and try to relate to toos and methodology stated in our contents in Econometrics course so that we could find something useful to improve our existing trading strategy. Firstly, we have tried implementing pair trading and backtesting by using Thai Stocks in Banking Sector, namely [KBank](https://finance.yahoo.com/quote/KBANK.BK/) and [SCB](https://finance.yahoo.com/quote/scb.bk/)  (both of which are sourced from Yahoo Finance).
 
@@ -421,6 +421,7 @@ VaR(test_return, p=0.95)
 SharpeRatio(as.ts(test_return), Rf = 0, p=0.95, FUN = "StdDev")
 SharpeRatio.annualized(test_return, Rf=0)
 ```
+
 ### Conclusion
 In this group work project, adopted methodologies from several articles, we have implemented algorithmic trading strategy based upon neural network predictive model. Upon including, Google Trend data and GARCH model, we also devise a new neural network model. As the new neural model's performance shown, although the new neural network model does notsignificantly outperform the former model in terms of accuracy, sensitivity and specificity, the new model prediction can produce stable returns as it gives lower standard deviation of Sharpe ratio. Apart from that, this implementation proves that we can incoporate several techniques from traditional time-series technical anaysis and advanced machine learning techniques into practical use for predictive model development.
 
