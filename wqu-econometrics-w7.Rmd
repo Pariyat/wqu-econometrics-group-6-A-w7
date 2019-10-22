@@ -1,12 +1,13 @@
 ---
-title: "wqu-econometrics-group-6-A-w7"
+title: "Final Report \n WQU Econometrics Week 7 Group 6A"
 output:
-  pdf_document:
+  prettydoc::html_pretty:
+    theme: hpstr
+    highlight: github
     toc: yes
   word_document:
     toc: yes
-  html_document:
-    theme: spacelab
+  pdf_document:
     toc: yes
 ---
 
@@ -14,51 +15,84 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Group Member (in alphabetical order):  
+## Group  Member (in alphabetical order):  
 - Dylan Thorne (dylan.thorne@gmail.com)  
 - Pariyat Limpitheeprakan (macchiato.me@gmail.com)    
 - Trai Torsricharoen (traitorsricharoen@gmail.com)  
 - YIU LEUNG CHENG (howard.yl.cheng.hk@gmail.com)  
 
 
+## 3.3.1 Algorithmic Trading 
+To design our own algorithmic trading strategy in R. We decided our selections in this task as follows:
 
-[KBank](https://finance.yahoo.com/quote/KBANK.BK/)
-[SCB](https://finance.yahoo.com/quote/scb.bk/)
+**Number of assets in the strategy**: SPY (Source:[Yahoo](https://finance.yahoo.com/quote/SPY))  
+**Type of asset**: stock  
+**Timeframe**: from `2007-03-01` to `2017-03-01`  
+**Coding language**: R, Excel (used supplmentarily for our analysis)  
+**Model**: Neural Networks (Package: [nnet](https://cran.r-project.org/web/packages/nnet/nnet.pdf)).  
 
-## R Markdown
-```{r}
-library("quantmod")
-library("e1071")
-getSymbols("SPY", scr="yahoo")
-SPY500<- SPY[,"SPY.Close"]
-head(SPY500)
+Forecasting stock prices has been a daunting task for many of the researchers and analysts. Thanks to recent breakthroughs of deep learning, applications such as deep neural network (Palaniappan, 2018), LSTM (Choudhury, 2019), or even GAN (Zhang, Zhong, Dong, Wang, & Wang, 2019) have been adopted into predicting future stock price in real-time manners. Therefore, we aim to try imitate such application. Our main idea in this project is to simply use neural network model to forcast the direction of stock price. 
+
+Our algorithmic trading implementation are described step-by-step as follow:
+
+### Load input time series data, 
+
+Firstly, we found following package useful in our implmementation:
+```{r echo=T, results='hide',message=FALSE}
+require("quantmod") # useful quantitative financial modelling and trading framework in R
+require(zoo) # for faciliating dealing with time series data
+require(dplyr) # for faciliating data transformation
+require(nnet) # for NN model
+require(caret) # for misc statistics and fundamental machine learning model.
+require(ggfortify) # for data visualization
+require(magrittr) # for piping %>%
+require(PerformanceAnalytics) # for calulate annual return and cummulative return
 ```
+Then we load `SPY` from Yahoo Finance and preview and do some EDA on the time series.
+```{r read_input}
+options("getSymbols.warning4.0"=FALSE)
+invisible(getSymbols("SPY", scr="yahoo",verbose = FALSE))
+SPY500<- SPY[,"SPY.Close"]
+autoplot(SPY500)
+```
+
+### Imputation & Feature Engineering 
+We adopted [Last Observation Carried Forward](https://tidsskriftet.no/en/2019/05/medisin-og-tall/last-observation-carried-forward) imputation method by `na.locf` in package [zoo](https://cran.r-project.org/web/packages/zoo/zoo.pdf). Furthermore, we need to extract and derive some features (columns) in order to help our neural networks to learn to encompass variance of the time series. The derived features we chose include: rolling mean, rolling standard deviation, RSI, MACD, Bollinger Bands (used to measure stock's volatility and price levels). For the label of the output of the model, we leverage the lag return and label the output into 3 classes: `NoWhere`, `Up` and `Down`.
 ```{r}
 #fill NA with previous non-NA value
-library(zoo)
-library(dplyr)
-SPY500 <- na.locf(SPY500)
-return <- quantmod::Delt(SPY500)
-```
 
-```{r}
+SPY500 <- na.locf(SPY500)
+return <- Delt(SPY500)
+
 average10<- rollapply(SPY500, 10, mean)
 average20<-rollapply(SPY500, 20, mean)
+
 std10<- rollapply(SPY500, 10, sd)
 std20<- rollapply(SPY500, 20, sd)
+
 rsi5<- RSI(SPY500,5,"SMA")
 rsi14<- RSI(SPY500, 14, "SMA") 
+
 macd12269<- MACD(SPY500, 12, 26, 9, "SMA")
 macd7205<- MACD(SPY500, 7, 20, 5, "SMA")
+
 bollinger_bands<-BBands(SPY500,20,"SMA",2)
+
 direction<- data.frame(matrix(NA,dim(SPY500)[1],1))
+
 lagreturn<- (SPY500 - Lag(SPY500, 20))/Lag(SPY500, 20)
+
+# Feature Engineer the label (multi-class classification)
 direction[lagreturn>0.02] <- "Up"
 direction[lagreturn< -0.02] <- "Down"
 direction[lagreturn< 0.02 &lagreturn> -0.02] <- "NoWhere"
+
 SPY500 <- cbind(SPY500, average10, average20, std10, std20, rsi5, rsi14, macd12269, macd7205, bollinger_bands)
-head(SPY500)
 ```
+
+### Split Train-Test-Validate Sampling
+Next, we split train, test, validate dataset. Notice that we simply divide time series data into train, test and validate dataset by year similar to cross-validation method ("Cross-Validation strategies for Time Series forecasting [Tutorial]," 2019). More importantly, we need to normalize the train, test and validate dataset as well.
+
 ```{r}
 train_sdate<- "2007-03-01"
 train_edate<- "2017-03-01"
@@ -83,10 +117,20 @@ norm_test<- (test-t(trainme*t(testidn)))/t(trainstd*t(testidn))
 traindir<- direction[trainrow,1]
 validir<- direction[valirow,1]
 testdir<- direction[testrow,1]
-library(nnet)
+```
+
+### Train our neural network model
+As we tuned the parameters, we found that we use 4 hidden layers and use default least-squares cross entropy function to calculate errors. Due to limitations of [Rstudio Cloud](https://rstudio.cloud/), we limit max iteration to 100 iterations to train the model.
+
+```{r}
 set.seed(1)
 neural_network<- nnet(norm_train, class.ind(traindir), size=4, trace=T)
 dim(norm_train)
+```
+
+### Evaluate our model with validate and test dataset
+To measure performance of our neural network model, we utilize confusion matrix to view model's accuracy, sensitivity, specificity, etc. See more detailed explaination about how to use these metric to evaluate predictive models in ("Measures of Predictive Models: Sensitivity and Specificity," 2018).                  
+```{r}
 vali_pred<-predict(neural_network, norm_vali)
 head(vali_pred)
 vali_pred_class<- data.frame(matrix(NA,dim(vali_pred)[1],1))
@@ -94,12 +138,14 @@ vali_pred_class[vali_pred[,"Down"] > 0.5,1]<- "Down"
 vali_pred_class[vali_pred[,"NoWhere"] > 0.5,1]<- "NoWhere"
 vali_pred_class[vali_pred[,"Up"] > 0.5,1]<- "Up"
 vali_pred_class[is.na(vali_pred_class)]<- "NoWhere"
-library(caret)
+
 u<- union(vali_pred_class[,1],validir)
 t<-table(factor(vali_pred_class[,1],u),factor(validir,u))
 confusionMatrix(t)
+```
+```{r}
 test_pred<- predict(neural_network, norm_test)
-test_pred
+head(test_pred)
 test_pred_class<- data.frame(matrix(NA,dim(test_pred)[1],1))
 test_pred_class[test_pred[,"Down"] > 0.5,1]<- "Down"
 test_pred_class[test_pred[,"NoWhere"] > 0.5,1]<- "NoWhere"
@@ -108,38 +154,70 @@ test_pred_class[is.na(test_pred_class)]<- "NoWhere"
 u<- union(test_pred_class[,1],testdir)
 t<-table(factor(test_pred_class[,1],u),factor(testdir,u))
 confusionMatrix(t)
+```
+
+As results shown above, accuracy of our model on validate and test dataset is quite high and statiscally significant. 
+
+### Calculate returns, cumulative returns, standard deviation and forecasts
+Now, we use predicted return from our model to calculate returns, cumulative returns, standard deviation (Sharpe Ratio of Return over StdDev).
+
+```{r}
 signal<-ifelse(test_pred_class=="Up",1,ifelse(test_pred_class=="Down",-1, 0))
-signal
 test_return_SPY<- return[(index(return)>= test_sdate & index(return)<= test_edate), ]
 test_return<- test_return_SPY*(signal)
-library(PerformanceAnalytics)
+
 #calculate cummulative return
 cumm_return<- Return.cumulative(test_return)
 cumm_return
+```
+```{r}
 #calculate annual return
 annual_return<- Return.annualized(test_return)
 annual_return
+```
+```{r}
 charts.PerformanceSummary(test_return)
+```
+```{r}
 VaR(test_return, p=0.95)
 SharpeRatio(as.ts(test_return), Rf = 0, p=0.95, FUN = "StdDev")
 SharpeRatio.annualized(test_return, Rf=0)
 ```
 
+# 3.3.2 Improve The Strategy
+
+
+[KBank](https://finance.yahoo.com/quote/KBANK.BK/)  
+[SCB](https://finance.yahoo.com/quote/scb.bk/)  
+
+
+pair trading by using Thai Stocks in Banking Sector, KBANK and SCB. You can search more details by using ticker KBANK.BK and SCB.BK in Yahoo Finance.
 
 
 
+
+
+
+
+
+
+
+ ANN model incorporate with GARCH model and Google trend input.
+ 
+References: 1. Volatility Forecast Based on the Hybrid Artificial Neural Network and GARCH-type Models (Lu, Que, & Cao, 2016 )
+2. GARCH based artificial neural networks in forecasting conditional variance of stock returns (Arnerić, Poklepović, & Aljinović, 2014)
 
 
 ```{r}
-library("quantmod")
+require("quantmod")
 getSymbols("SPY", scr="yahoo",from = as.Date("2007-01-04"), to = as.Date("2019-10-18"),warnings=FALSE)
 SPY500<- SPY[,"SPY.Close"]
 head(SPY500)
 ```
 ```{r}
 #fill NA with previous non-NA value
-library(zoo)
-library(dplyr)
+require(zoo)
+require(dplyr)
 SPY500 <- na.locf(SPY500)
 return <- Delt(SPY500)
 rows = nrow(return)
@@ -197,28 +275,36 @@ res = residuals(model)
 ```{r}
 #qq-plot of residual between GARCH model and actual data 
 qqnorm(res)
-library("rugarch")
+require("rugarch")
 garch11_spec <- ugarchspec(variance.model = list(garchOrder = c(11, 0)),mean.model = list(armaOrder = c(2, 0)))
 garch11_fit<-ugarchfit(spec=garch11_spec, data=timeseries)
 garch11_fit
 garch11_fit@fit$fitted.values
-
+```
+```{r}
 #visualize how well GARCH itself fit the data
 plot(timeseries, type="l", col="blue")
 lines(garch11_fit@fit$fitted.values, col="green")
-
+```
+```{r}
 #binding closing price and technical analysis indicators into a variable SPY500
 SPY500 <- cbind(SPY500[2:nrow(SPY500)], average10[2:nrow(average10)], average20[2:nrow(average20)], std10[2:nrow(std10)], std20[2:nrow(std20)], rsi5[2:nrow(rsi5)], rsi14[2:nrow(rsi14)], macd12269[2:nrow(macd12269)], macd7205[2:nrow(macd7205)], bollinger_bands[2:nrow(bollinger_bands)])
-
+```
+```{r}
 #integrate GARCH model rolling window prediction output into variable 
 SPY500 <- cbind(SPY500,garch11_fit@fit$fitted.values)
+```
 
+I extract those from google trend. Yet, the data retrieved from there is in monthly basis. So, I just transformed those data into daily basis with excel
+
+```{r}
 #Import Google trend data regarding trend of recession and expansion
-recessiondata<-read.csv("C:/WQU/Recession_gtrends.csv",header=F)$V2
-expansiondata<-read.csv("C:/WQU/Expansion_gtrends.csv",header=F)$V2
+recessiondata<-read.csv("Recession_gtrends.csv",header=F)$V2
+expansiondata<-read.csv("Expansion_gtrends.csv",header=F)$V2
 #integrate Google trend data into variable
 SPY500 <- cbind(SPY500,recessiondata,expansiondata)
-
+```
+```{r}
 #indicate end and start dates for train, validating and testing period
 train_sdate<- "2007-03-01"
 train_edate<- "2017-03-01"
@@ -226,12 +312,14 @@ vali_sdate<- "2017-03-02"
 vali_edate<- "2018-03-02"
 test_sdate<- "2018-03-03"
 test_edate<- "2019-10-18"
-
+```
+```{r}
 #constructing data ranges for the three datasets
 trainrow<- which(index(SPY500) >= train_sdate& index(SPY500) <= train_edate)
 valirow<- which(index(SPY500) >= vali_sdate& index(SPY500) <= vali_edate)
 testrow<- which(index(SPY500) >= test_sdate& index(SPY500) <= test_edate)
-
+```
+```{r}
 #extract data fpr training, validating and testing periods
 train<- SPY500[trainrow,]
 vali<- SPY500[valirow,]
@@ -254,13 +342,13 @@ traindir<- direction[trainrow,1]
 validir<- direction[valirow,1]
 testdir<- direction[testrow,1]
 
-
-
 #implement ANN
-library(nnet)
+require(nnet)
 set.seed(1)
 neural_network<- nnet(norm_train, class.ind(traindir), size=4, trace=T)
 
+```
+```{r}
 #obtain data dimension
 dim(norm_train)
 
@@ -276,7 +364,7 @@ vali_pred_class[vali_pred[,"Up"] > 0.5,1]<- "Up"
 vali_pred_class[is.na(vali_pred_class)]<- "NoWhere"
 
 #check forecast accuracy
-library(caret)
+require(caret)
 u<- union(vali_pred_class[,1],validir)
 t<-table(factor(vali_pred_class[,1],u),factor(validir,u))
 confusionMatrix(t)
@@ -291,19 +379,23 @@ test_pred_class[test_pred[,"Down"] > 0.5,1]<- "Down"
 test_pred_class[test_pred[,"NoWhere"] > 0.5,1]<- "NoWhere"
 test_pred_class[test_pred[,"Up"] > 0.5,1]<- "Up"
 test_pred_class[is.na(test_pred_class)]<- "NoWhere"
-
+```
+```{r}
 #Check the accuracy of the forecasts
 u<- union(test_pred_class[,1],testdir)
 t<-table(factor(test_pred_class[,1],u),factor(testdir,u))
 confusionMatrix(t)
-
+```
+```{r}
 #generate trade signals using the same pattern as human psychology
 signal<-ifelse(test_pred_class=="Up",1,ifelse(test_pred_class=="Down",-1, 0))
 signal
 
 test_return_SPY<- return[(index(return)>= test_sdate & index(return)<= test_edate), ]
 test_return<- test_return_SPY*(signal)
-library(PerformanceAnalytics)
+```
+```{r}
+require(PerformanceAnalytics)
 
 #calculate cummulative return
 cumm_return<- Return.cumulative(test_return)
@@ -317,3 +409,18 @@ VaR(test_return, p=0.95)
 SharpeRatio(as.ts(test_return), Rf = 0, p=0.95, FUN = "StdDev")
 SharpeRatio.annualized(test_return, Rf=0)
 ```
+
+# References
+Palaniappan, V. (2018, November 21). Neural Networks to Predict the Market. Retrieved from https://towardsdatascience.com/neural-networks-to-predict-the-market-c4861b649371
+
+Choudhury, A. (2019, May 6). Stock Market Prediction by Recurrent Neural Network on LSTM Model. Retrieved from https://blog.usejournal.com/stock-market-prediction-by-recurrent-neural-network-on-lstm-model-56de700bff68
+
+Zhang, K., Zhong, G., Dong, J., Wang, S., & Wang, Y. (2019). Stock Market Prediction Based on Generative Adversarial Network. Procedia Computer Science, 147, 400-406. doi:10.1016/j.procs.2019.01.256
+
+Cross-Validation strategies for Time Series forecasting [Tutorial]. (2019, May 6). Retrieved from https://hub.packtpub.com/cross-validation-strategies-for-time-series-forecasting-tutorial/
+
+Measures of Predictive Models: Sensitivity and Specificity. (2018, January 5). Retrieved from https://www.theanalysisfactor.com/sensitivity-and-specificity/
+
+Arnerić, J., Poklepović, T., & Aljinović, Z. (2014). GARCH based artificial neural networks in forecasting conditional variance of stock returns. Croatian Operational Research Review, 5(2), 329-343. doi:10.17535/crorr.2014.0017
+
+Lu, X., Que, D., & Cao, G. (2016). Volatility Forecast Based on the Hybrid Artificial Neural Network and GARCH-type Models. Procedia Computer Science, 91, 1044-1049. doi:10.1016/j.procs.2016.07.145
